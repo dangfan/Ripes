@@ -15,6 +15,11 @@ jobs:
       matrix:
         build-type: [Release]
 
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
+
     steps:
 
     - name: Job info
@@ -99,6 +104,19 @@ jobs:
           Ripes.js
           Ripes.worker.js
           qtloader.js
+
+    - name: Create site directory  
+      run: |
+        mkdir -p publish
+        cp Ripes.wasm Ripes.js Ripes.worker.js qtloader.js index.html publish/
+
+    - name: Deploy to Cloudflare Pages
+      uses: cloudflare/wrangler-action@v3
+      with:
+        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        command: pages deploy ./publish/ --project-name=ripes  
+        gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 
     # Dispatch the publish.yml workflow over at mortbopet.github.io
     - name: Publish to GitHub Pages
