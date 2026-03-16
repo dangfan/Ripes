@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - '*'
+      - '!cf-pages-deploy'
 
 jobs:
   release-setup:
