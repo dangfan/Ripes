@@ -109,7 +109,9 @@ jobs:
     - name: Create site directory  
       run: |
         mkdir -p publish
-        cp Ripes.wasm Ripes.js Ripes.worker.js qtloader.js index.html publish/
+        cp Ripes.wasm Ripes.js Ripes.worker.js qtloader.js publish/
+        cp -r resources/wasm/* publish/
+        ls -alh publish/
 
     - name: Deploy to Cloudflare Pages
       uses: cloudflare/wrangler-action@v3
