@@ -2,8 +2,9 @@ name: Build and deploy docker image
 on:
   push:
     branches:
-      - master
-  workflow_dispatch:
+      - '*'
+      - '!cf-pages-deploy'
+  pull_request:
 
 jobs:
   docker:

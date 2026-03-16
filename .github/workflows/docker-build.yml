@@ -1,5 +1,10 @@
 name: Build docker image
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - '*'
+      - '!cf-pages-deploy'
+  pull_request:
 
 jobs:
   docker:

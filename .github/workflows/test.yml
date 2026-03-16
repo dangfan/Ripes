@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - '**'
+      - '!cf-pages-deploy'
   pull_request:
 
 jobs:

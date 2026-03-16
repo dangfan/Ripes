@@ -1,7 +1,12 @@
 
 name: Check code format
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - '*'
+      - '!cf-pages-deploy'
+  pull_request:
 
 jobs:
   build:
