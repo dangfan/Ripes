@@ -211,7 +211,7 @@ jobs:
         apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         wranglerVersion: "4.74.0"
-        command: pages deploy ./publish/ --project-name=ripes 
+        command: pages deploy ./publish/ --project-name=ripes --branch=main --commit-dirty=true
         gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 
     # Dispatch the publish.yml workflow over at mortbopet.github.io
