@@ -1,194 +1,263 @@
 name: WASM / Qt 6.6.0
+
 on:
   push:
-    branches:
-      - '**'
   workflow_dispatch:
+
+concurrency:
+  group: wasm-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: 6.6.0
+  EMSDK_VERSION: 3.1.25
+  BUILD_TYPE: MinSizeRel
+  CF_DEPLOY_BRANCH: refs/heads/cf-pages-deploy
+  QT_HOST_DIR: ../Qt/6.6.0/gcc_64
+  QT_WASM_DIR: ../Qt/6.6.0/wasm_singlethread
 
 jobs:
   buildUbuntu:
     runs-on: ubuntu-latest
-    env:
-      CC: emcc
-      CXX: em++
-
-    strategy:
-      matrix:
-        build-type: [MinSizeRel]
+    timeout-minutes: 60
 
     permissions:
       contents: read
       id-token: write
       deployments: write
 
+    env:
+      CC: emcc
+      CXX: em++
+
     steps:
+      - name: Job info
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "GitHub ref: ${{ github.ref }}"
+          echo "GitHub sha: ${{ github.sha }}"
+          echo 'Event payload: ${{ toJson(github.event) }}'
 
-    - name: Job info
-      run: |
-        echo "GitHub Ref: ${{ github.ref }}"
-        echo "Event: ${{ github.event }}"
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
+            cmake \
+            git \
+            wget \
+            ninja-build \
+            tree \
+            desktop-file-utils \
+            python3
 
-    - name: get container ready for build
-      run: |
-        sudo apt-get update
-        DEBIAN_FRONTEND=noninteractive sudo apt-get install -y -q --force-yes \
-        automake cmake git wget libfuse2 desktop-file-utils tree \
-        build-essential libgl1-mesa-dev libxkbcommon-x11-0 libpulse-dev \
-        libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 \
-        libxcb-xinerama0 libxcb-composite0 libxcb-cursor0 libxcb-damage0 \
-        libxcb-dpms0 libxcb-dri2-0 libxcb-dri3-0 libxcb-ewmh2 libxcb-glx0 \
-        libxcb-present0 libxcb-randr0 libxcb-record0 libxcb-render0 libxcb-res0 \
-        libxcb-screensaver0 libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-util1 libegl1 libegl1-mesa-dev
+      - name: Checkout sources
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
-    - name: checkout sources
-      uses: actions/checkout@v6
-      with:
-        submodules: recursive
-        fetch-depth: 0
+      - name: Install Qt host
+        uses: jurplel/install-qt-action@v4
+        with:
+          aqtversion: '==3.1.*'
+          py7zrversion: '>=0.20.2'
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: gcc_64
+          modules: qtcharts
+          cache: true
+          cache-key-prefix: install-qt-host-${{ env.QT_VERSION }}
 
-    - name: Install Qt (Host)
-      uses: jurplel/install-qt-action@v4
-      with:
-        aqtversion: '==3.1.*'
-        py7zrversion: '>=0.20.2'
-        version: '6.6.0'
-        host: 'linux'
-        target: 'desktop'
-        arch: 'gcc_64'
-        cache: 'true'
-        cache-key-prefix: 'install-qt-host-6.6.0'
-        modules: 'qtcharts'
+      - name: Install Qt for Emscripten
+        uses: jurplel/install-qt-action@v4
+        with:
+          aqtversion: '==3.1.*'
+          py7zrversion: '>=0.20.2'
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: wasm_singlethread
+          modules: qtcharts
+          cache: true
+          cache-key-prefix: install-qt-emscripten-${{ env.QT_VERSION }}
 
-    - name: Install Qt (Emscripten)
-      uses: jurplel/install-qt-action@v4
-      with:
-        aqtversion: '==3.1.*'
-        py7zrversion: '>=0.20.2'
-        version: '6.6.0'
-        host: 'linux'
-        target: 'desktop'
-        arch: 'wasm_multithread'
-        modules: 'qtcharts'
-        cache: 'true'
-        cache-key-prefix: 'install-qt-emscripten-6.6.0'
+      - name: Cache emsdk
+        uses: actions/cache@v4
+        with:
+          path: emsdk
+          key: ${{ runner.os }}-emsdk-${{ env.EMSDK_VERSION }}
 
-    - name: cache Emscripten
-      uses: actions/cache@v5
-      with:
-        path: ./emsdk
-        key: ${{ runner.os }}-wasm-emsdk
+      - name: Install Emscripten
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d emsdk ]; then
+            git clone https://github.com/emscripten-core/emsdk.git
+          fi
+          cd emsdk
+          ./emsdk install $EMSDK_VERSION
+          ./emsdk activate $EMSDK_VERSION
 
-    - name: install Emscripten
-      run: |
-        if [ ! -d emsdk ]; then
-          git clone https://github.com/emscripten-core/emsdk.git
-        fi
-        cd emsdk
-        ./emsdk install 3.1.25
-        ./emsdk activate 3.1.25
+      - name: Configure build
+        shell: bash
+        run: |
+          set -euo pipefail
+          source emsdk/emsdk_env.sh
 
-    - name: cache build result
-      uses: actions/cache@v5
-      with:
-        path: ./build
-        key: ${{ runner.os }}-wasm-builddir
+          QT_HOST_PATH="$(pwd)/${QT_HOST_DIR}"
+          QT_WASM_PATH="$(pwd)/${QT_WASM_DIR}"
 
-    - name: build Ripes
-      run: |
-        echo "building desktop"
-        source emsdk/emsdk_env.sh
-        export QT_HOST_PATH=$(pwd)/../Qt/6.6.0/gcc_64/
-        find ${QT_HOST_PATH}
-        cmake                                           \
-          -S . -B build                                 \
-          -DCMAKE_BUILD_TYPE=${{ matrix.build-type }}   \
-          -DRIPES_WITH_QPROCESS=OFF                     \
-          -DEMSCRIPTEN=1                                \
-          -DQT_HOST_PATH="${QT_HOST_PATH}"              \
-          -DCMAKE_TOOLCHAIN_FILE=$(pwd)/../Qt/6.6.0/wasm_multithread/lib/cmake/Qt6/qt.toolchain.cmake \
-          -DCMAKE_PREFIX_PATH=$(pwd)/../Qt/6.6.0/wasm_multithread/ \
-          -DEMSCRIPTEN_FORCE_COMPILERS=ON \
-          .
-        cmake --build build -j $(nproc)
+          test -d "$QT_HOST_PATH"
+          test -d "$QT_WASM_PATH"
 
-    - uses: actions/upload-artifact@v7
-      with:
-        name: ${{ matrix.build-type }}_wasm
-        path: |
-          build/Ripes.wasm
-          build/Ripes.js
-          build/Ripes.worker.js
-          build/qtloader.js
+          echo "QT_HOST_PATH=$QT_HOST_PATH"
+          echo "QT_WASM_PATH=$QT_WASM_PATH"
 
-    - name: Prepare R2 wasm metadata
-      if: ${{ github.ref == 'refs/heads/cf-pages-deploy' }}
-      id: wasm_meta
-      shell: bash
-      env:
-        R2_PUBLIC_BASE_URL: ${{ vars.CLOUDFLARE_R2_PUBLIC_BASE_URL }}
-      run: |
-        set -euo pipefail
-        if [ -z "${R2_PUBLIC_BASE_URL:-}" ]; then
-          echo "Missing GitHub variable CLOUDFLARE_R2_PUBLIC_BASE_URL (eg. https://assets.example.com)"
-          exit 1
-        fi
-        WASM_KEY="ripes/${GITHUB_SHA}/Ripes.wasm"
-        WASM_URL="${R2_PUBLIC_BASE_URL%/}/${WASM_KEY}"
-        echo "wasm_key=${WASM_KEY}" >> "$GITHUB_OUTPUT"
-        echo "wasm_url=${WASM_URL}" >> "$GITHUB_OUTPUT"
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DRIPES_WITH_QPROCESS=OFF \
+            -DEMSCRIPTEN=1 \
+            -DQT_HOST_PATH="$QT_HOST_PATH" \
+            -DCMAKE_TOOLCHAIN_FILE="$QT_WASM_PATH/lib/cmake/Qt6/qt.toolchain.cmake" \
+            -DCMAKE_PREFIX_PATH="$QT_WASM_PATH"
 
-    - name: Upload wasm to Cloudflare R2
-      uses: cloudflare/wrangler-action@v3
-      if: ${{ github.ref == 'refs/heads/cf-pages-deploy' }}
-      with:
-        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        wranglerVersion: "4.74.0"
-        command: r2 bucket list
-        gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Ripes
+        shell: bash
+        run: |
+          set -euo pipefail
+          source emsdk/emsdk_env.sh
+          cmake --build build --parallel
 
-    - name: Upload wasm to Cloudflare R2
-      uses: cloudflare/wrangler-action@v3
-      if: ${{ github.ref == 'refs/heads/cf-pages-deploy' }}
-      with:
-        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        wranglerVersion: "4.74.0"
-        command: r2 object put ${{ secrets.CLOUDFLARE_R2_BUCKET }}/${{ steps.wasm_meta.outputs.wasm_key }} --file build/Ripes.wasm --content-type application/wasm --cache-control "public, max-age=31536000, immutable"
-        gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BUILD_TYPE }}_wasm
+          if-no-files-found: error
+          path: |
+            build/Ripes.wasm
+            build/Ripes.js
+            build/qtloader.js
 
-    - name: Rewrite wasm URL in generated JS
-      if: ${{ github.ref == 'refs/heads/cf-pages-deploy' }}
-      shell: bash
-      env:
-        WASM_URL: ${{ steps.wasm_meta.outputs.wasm_url }}
-      run: |
-        set -euo pipefail
-        grep -q 'Ripes\.wasm' build/Ripes.js
-        sed -i "s|Ripes\\.wasm|${WASM_URL}|g" build/Ripes.js
-        grep -q "${WASM_URL}" build/Ripes.js
+      - name: Prepare R2 wasm metadata
+        if: ${{ github.ref == env.CF_DEPLOY_BRANCH }}
+        id: wasm_meta
+        shell: bash
+        env:
+          R2_PUBLIC_BASE_URL: ${{ vars.CLOUDFLARE_R2_PUBLIC_BASE_URL }}
+        run: |
+          set -euo pipefail
+          [ -n "${R2_PUBLIC_BASE_URL:-}" ] || {
+            echo "Missing GitHub variable CLOUDFLARE_R2_PUBLIC_BASE_URL"
+            exit 1
+          }
 
-    - name: Create site directory  
-      run: |
-        mkdir -p publish
-        cp build/*.js publish/
-        cp -r resources/wasm/* publish/
-        ls -alh publish/
+          WASM_KEY="ripes/${GITHUB_SHA}/Ripes.wasm"
+          WASM_URL="${R2_PUBLIC_BASE_URL%/}/${WASM_KEY}"
 
-    - name: Deploy to Cloudflare Pages
-      uses: cloudflare/wrangler-action@v3
-      if: ${{ github.ref == 'refs/heads/cf-pages-deploy' }}
-      with:
-        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        wranglerVersion: "4.74.0"
-        command: pages deploy ./publish/ --project-name=ripes 
-        gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          echo "wasm_key=${WASM_KEY}" >> "$GITHUB_OUTPUT"
+          echo "wasm_url=${WASM_URL}" >> "$GITHUB_OUTPUT"
 
-    # Dispatch the publish.yml workflow over at mortbopet.github.io
-    - name: Publish to GitHub Pages
-      run: |
-        gh workflow run publish.yml -R mortbopet/mortbopet.github.io --ref master
-      if: github.repository == 'mortbopet/Ripes' && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
-      env:
-        GH_TOKEN: ${{ secrets.MORTBOPET_GITHUB_IO_TOKEN }}
+      - name: Validate Cloudflare deploy inputs
+        if: ${{ github.ref == env.CF_DEPLOY_BRANCH }}
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
+          R2_PUBLIC_BASE_URL: ${{ vars.CLOUDFLARE_R2_PUBLIC_BASE_URL }}
+        run: |
+          set -euo pipefail
+
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || { echo "Missing secret: CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+          [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || { echo "Missing secret: CLOUDFLARE_API_TOKEN"; exit 1; }
+          [ -n "${CLOUDFLARE_R2_BUCKET:-}" ] || { echo "Missing secret: CLOUDFLARE_R2_BUCKET"; exit 1; }
+          [ -n "${R2_PUBLIC_BASE_URL:-}" ] || { echo "Missing variable: CLOUDFLARE_R2_PUBLIC_BASE_URL"; exit 1; }
+
+          case "${R2_PUBLIC_BASE_URL}" in
+            http://*|https://*) ;;
+            *) echo "CLOUDFLARE_R2_PUBLIC_BASE_URL must start with http:// or https://"; exit 1 ;;
+          esac
+
+      - name: Preflight Cloudflare R2 access
+        if: ${{ github.ref == env.CF_DEPLOY_BRANCH }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.74.0"
+          command: r2 bucket list
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload wasm to Cloudflare R2
+        if: ${{ github.ref == env.CF_DEPLOY_BRANCH }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.74.0"
+          command: >
+            r2 object put
+            ${{ secrets.CLOUDFLARE_R2_BUCKET }}/${{ steps.wasm_meta.outputs.wasm_key }}
+            --remote
+            --file build/Ripes.wasm
+            --content-type application/wasm
+            --cache-control "public, max-age=31536000, immutable"
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify wasm object on remote R2
+        if: ${{ github.ref == env.CF_DEPLOY_BRANCH }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.74.0"
+          command: >
+            r2 object get
+            ${{ secrets.CLOUDFLARE_R2_BUCKET }}/${{ steps.wasm_meta.outputs.wasm_key }}
+            --remote
+            --file /tmp/ripes-wasm-verify.wasm
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rewrite wasm URL in generated JS
+        if: ${{ github.ref == env.CF_DEPLOY_BRANCH }}
+        shell: bash
+        env:
+          WASM_URL: ${{ steps.wasm_meta.outputs.wasm_url }}
+        run: |
+          set -euo pipefail
+          grep -q 'Ripes\.wasm' build/Ripes.js
+          ESCAPED_WASM_URL=$(printf '%s\n' "$WASM_URL" | sed 's/[&/\]/\\&/g')
+          sed -i "s|Ripes\\.wasm|${ESCAPED_WASM_URL}|g" build/Ripes.js
+          grep -q "$WASM_URL" build/Ripes.js
+
+      - name: Create site directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p publish
+          cp build/*.js publish/
+          cp -r resources/wasm/* publish/
+          ls -alh publish/
+
+      - name: Deploy to Cloudflare Pages
+        if: ${{ github.ref == env.CF_DEPLOY_BRANCH }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.74.0"
+          command: pages deploy ./publish/ --project-name=ripes
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to GitHub Pages
+        if: github.repository == 'mortbopet/Ripes' && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MORTBOPET_GITHUB_IO_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run publish.yml -R mortbopet/mortbopet.github.io --ref master
