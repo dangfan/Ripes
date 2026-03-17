@@ -143,6 +143,17 @@ jobs:
       with:
         apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        wranglerVersion: "4.74.0"
+        command: r2 bucket list
+        gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload wasm to Cloudflare R2
+      uses: cloudflare/wrangler-action@v3
+      if: ${{ github.ref == 'refs/heads/cf-pages-deploy' }}
+      with:
+        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        wranglerVersion: "4.74.0"
         command: r2 object put ${{ secrets.CLOUDFLARE_R2_BUCKET }}/${{ steps.wasm_meta.outputs.wasm_key }} --file build/Ripes.wasm --content-type application/wasm --cache-control "public, max-age=31536000, immutable"
         gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 
@@ -170,6 +181,7 @@ jobs:
       with:
         apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        wranglerVersion: "4.74.0"
         command: pages deploy ./publish/ --project-name=ripes 
         gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 
