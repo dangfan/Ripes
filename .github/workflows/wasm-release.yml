@@ -120,10 +120,47 @@ jobs:
           build/Ripes.worker.js
           build/qtloader.js
 
+    - name: Prepare R2 wasm metadata
+      if: ${{ github.ref == 'refs/heads/cf-pages-deploy' }}
+      id: wasm_meta
+      shell: bash
+      env:
+        R2_PUBLIC_BASE_URL: ${{ vars.CLOUDFLARE_R2_PUBLIC_BASE_URL }}
+      run: |
+        set -euo pipefail
+        if [ -z "${R2_PUBLIC_BASE_URL:-}" ]; then
+          echo "Missing GitHub variable CLOUDFLARE_R2_PUBLIC_BASE_URL (eg. https://assets.example.com)"
+          exit 1
+        fi
+        WASM_KEY="ripes/${GITHUB_SHA}/Ripes.wasm"
+        WASM_URL="${R2_PUBLIC_BASE_URL%/}/${WASM_KEY}"
+        echo "wasm_key=${WASM_KEY}" >> "$GITHUB_OUTPUT"
+        echo "wasm_url=${WASM_URL}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload wasm to Cloudflare R2
+      uses: cloudflare/wrangler-action@v3
+      if: ${{ github.ref == 'refs/heads/cf-pages-deploy' }}
+      with:
+        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        command: r2 object put ${{ secrets.CLOUDFLARE_R2_BUCKET }}/${{ steps.wasm_meta.outputs.wasm_key }} --file build/Ripes.wasm --content-type application/wasm --cache-control "public, max-age=31536000, immutable"
+        gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Rewrite wasm URL in generated JS
+      if: ${{ github.ref == 'refs/heads/cf-pages-deploy' }}
+      shell: bash
+      env:
+        WASM_URL: ${{ steps.wasm_meta.outputs.wasm_url }}
+      run: |
+        set -euo pipefail
+        grep -q 'Ripes\.wasm' build/Ripes.js
+        sed -i "s|Ripes\\.wasm|${WASM_URL}|g" build/Ripes.js
+        grep -q "${WASM_URL}" build/Ripes.js
+
     - name: Create site directory  
       run: |
         mkdir -p publish
-        cp build/*.wasm build/*.js publish/
+        cp build/*.js publish/
         cp -r resources/wasm/* publish/
         ls -alh publish/
 
